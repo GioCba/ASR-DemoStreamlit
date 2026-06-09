@@ -8,6 +8,22 @@ import threading
 import numpy as np
 import time
 from scipy.signal import resample
+import datetime
+
+class SharedConfig:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._target_length_ms = 500
+
+    def set_target_length(self, value):
+        with self._lock:
+            self._target_length_ms = value
+
+    def get_target_length(self):
+        with self._lock:
+            return self._target_length_ms
+
+config = SharedConfig()
 
 ####################################
 # Variables
@@ -22,12 +38,12 @@ if 'is_transcripted' not in st.session_state:
     st.session_state['is_transcripted'] = False
 if 'transcripted_text' not in st.session_state:
     st.session_state['transcripted_text'] = ""
-if 'is_model_loaded' not in st.session_state:
-    st.session_state['is_model_loaded'] = False
 if 'exit' not in st.session_state:
     st.session_state['exit'] = "All"
 if 'realtime_content' not in st.session_state:
     st.session_state['realtime_content'] = ""
+if 'model_loaded' not in st.session_state:
+    st.session_state['model_loaded'] = None
 
 AUDIO_DIR = "user_files/"
 file_to_transcript = ""
@@ -83,6 +99,9 @@ def sender_worker(audio_queue):
     while True:
         try:
             data = audio_queue.get()
+
+            target_ms = config.get_target_length()
+            target_len = int((target_ms / 20) * 640)
             if isinstance(data, str) and data == SENTINEL:
                 print("sentinel recv")
                 if f is not None:
@@ -100,7 +119,7 @@ def sender_worker(audio_queue):
                 params = {}
 
                 if session_id:
-                    params["session_id"] = session_id
+                    params["session_id"] = None
                     params['final'] = True
 
                 response = requests.post(
@@ -114,7 +133,7 @@ def sender_worker(audio_queue):
                 if resp_json["text"]:
                     update_queue.put(resp_json)
 
-                session_id = str(int(session_id) + 1)
+                session_id = None
                 continue
 
             audio_16 = data
@@ -125,7 +144,7 @@ def sender_worker(audio_queue):
 
             buf.extend(raw_data)
 
-            if is_speech and len(buf) >= 16000:
+            if is_speech and len(buf) >= target_len:
 
                 files = {
                     "file": (
@@ -151,6 +170,8 @@ def sender_worker(audio_queue):
                 resp_json = response.json()
                 session_id = resp_json["session_id"]
                 # TODO improve readability
+                print(f'{resp_json=}')
+                print(datetime.datetime.now())
                 if resp_json["text"][0] and resp_json["text"][1] and resp_json["text"][2] and resp_json["text"][3] and resp_json["text"][4] and resp_json["text"][5]:
                     update_queue.put(resp_json)
 
@@ -186,17 +207,16 @@ st.markdown("""
 st.title("Transcriber")
 
 # Sidebar
-if not st.session_state['is_model_loaded']:
+if not st.session_state['model_loaded']:
     with st.sidebar:
-        with st.container(horizontal_alignment='center', horizontal=False):
-            st.session_state.lang = st.selectbox("Select language", key="model_lang", options=["Italian", "English"])
-            if st.button("Load model"):
-                try:
-                    resp = requests.post("http://127.0.0.1:8000/set_model/", data={'lang': st.session_state.lang})
-                    st.session_state['is_model_loaded'] = True
-                except:
-                    st.error("Server Error")
-
+        with st.spinner():
+            resp = requests.get("http://127.0.0.1:8000/model_info")
+            st.session_state.model_loaded = resp.json()['state']
+            
+        if st.session_state.model_loaded:
+            st.success("OK")
+        else:
+            st.error("Error")
 # TABS
 mic_file_tab, file_tab, mic_rt_tab  = st.tabs(["Record & Transcribe", "Upload & Transcribe", "Real-Time transcription"])
 
@@ -204,7 +224,7 @@ with mic_rt_tab:
     with st.container(
         border=True, height="stretch", width="stretch", horizontal_alignment="center"
     ):
-        if st.session_state['is_model_loaded']:
+        if st.session_state['model_loaded']:
             ctx = webrtc_streamer(    
                 key="audio",
                 audio_frame_callback=audio_frame_callback,
@@ -216,6 +236,10 @@ with mic_rt_tab:
             st.divider()
             with st.container(horizontal=True, horizontal_alignment="distribute"):
                 with st.popover("Settings"):
+                    new_length = st.number_input("Target buffer length in ms", min_value=200, max_value=1000, value=config.get_target_length(), step=20)
+
+                    config.set_target_length(new_length)
+
                     st.write("WIP")
                     # Scelta del linguaggio
                     st.session_state.lang = st.selectbox("Seleziona lingua", key="mic_rt_chosen_lang", options=["Italian", "English"])
@@ -274,19 +298,20 @@ with mic_rt_tab:
                             st.write(f'Exit {i+1}: {st.session_state.realtime_content[i]}')
                     else:
                         st.write(f'Exit {st.session_state.exit}: {st.session_state.realtime_content[int(st.session_state.exit)]}')
+                    st.session_state['realtime_content'] = None
                 except queue.Empty:
                     pass
 
 
         else:
-            st.warning("Carica il modello dalla sidebar")
+            st.warning("Load model from sidebar")
 
 with file_tab:
     with st.container(
         border=True, height="stretch", width="stretch", horizontal_alignment="center"
         ):
 
-        if st.session_state['is_model_loaded']:
+        if st.session_state['model_loaded']:
             # File upload
             uploaded_file = st.file_uploader(
                 "Upload file", type=[".wav", ".ogg", '.flac'], label_visibility="collapsed"
@@ -317,7 +342,9 @@ with file_tab:
                         if file_to_transcript is not None:
                             files = {"file": (file_to_transcript.name, file_to_transcript, "audio/wav")}
                             try:
-                                resp = requests.post("http://127.0.0.1:8000/uploads", files=files)
+                                params = {}
+                                params['lang'] = st.session_state.lang
+                                resp = requests.post("http://127.0.0.1:8000/uploads", files=files, data=params)
                                 st.session_state['transcripted_text'] = resp.json()['text']
                                 st.session_state.is_transcripted = True
                             except ConnectionError:
@@ -335,14 +362,14 @@ with file_tab:
                     chosen_idx = int(st.session_state['exit']) - 1
                     st.write(f'Exit {chosen_idx+1}: ' + st.session_state['transcripted_text'][chosen_idx])
         else:
-            st.warning("Carica il modello dalla sidebar")    
+            st.warning("Load model from sidebar")    
 
 with mic_file_tab:
     with st.container(
         border=True, height="stretch", width="stretch", horizontal_alignment="center"
         ):
 
-        if st.session_state['is_model_loaded']:
+        if st.session_state['model_loaded']:
             file = st.audio_input("Audio", label_visibility="collapsed", sample_rate=16000)
             st.session_state.is_transcripted = False
 
@@ -368,7 +395,9 @@ with mic_file_tab:
                         if file_to_transcript is not None:
                             file_to_transcript.name = "user_file.wav"
                             files = {"file": (file_to_transcript.name, file_to_transcript, "audio/wav")}
-                            resp = requests.post("http://127.0.0.1:8000/uploads/", files=files)
+                            params = {}
+                            params['lang'] = st.session_state.lang
+                            resp = requests.post("http://127.0.0.1:8000/uploads/", files=files, data=params)
                             st.session_state['transcripted_text'] = resp.json()['text']
                             st.session_state.is_transcripted = True
                         else:
@@ -384,7 +413,7 @@ with mic_file_tab:
                     chosen_idx = int(st.session_state['exit']) - 1
                     st.write(f'Exit {chosen_idx+1}: ' + st.session_state['transcripted_text'][chosen_idx])
         else:
-            st.warning("Carica il modello dalla sidebar")
+            st.warning("Load model from sidebar")
 
 
 # st.caption("Made by Giovanni Confente Broll Avila")

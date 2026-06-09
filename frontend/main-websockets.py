@@ -11,6 +11,22 @@ from scipy.signal import resample
 from websockets.sync.client import connect
 import datetime
 
+class SharedConfig:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._target_length_ms = 500
+
+    def set_target_length(self, value):
+        with self._lock:
+            self._target_length_ms = value
+
+    def get_target_length(self):
+        with self._lock:
+            return self._target_length_ms
+
+config = SharedConfig()
+
+
 ####################################
 # Variables
 ####################################
@@ -79,12 +95,19 @@ def on_audio_ended():
 def sender_worker(audio_queue):
     buf = bytearray()
     vad = webrtcvad.Vad(2)
+
     # f = open("out.raw", 'wb')
     with connect("ws://127.0.0.1:8000/ws") as websocket:
         while True:
             try:
                 data = audio_queue.get()
+
+                target_ms = config.get_target_length()
+                target_len = int((target_ms / 20) * 640)
                 if isinstance(data, str) and data == SENTINEL:
+                    websocket.send(data)
+                    msg = websocket.recv()
+                    update_queue.put_nowait(msg)
                     print("sentinel recv")
                     print("stopped sending")
                     # f.flush()
@@ -104,7 +127,8 @@ def sender_worker(audio_queue):
 
                     buf.extend(raw_data)
 
-                    if is_speech and len(buf) >= 16000:
+                    if is_speech and len(buf) >= target_len:
+                        print(f'{len(buf)=}')
                         # f.write(buf)
                         print(f'{datetime.datetime.now()=}')
                         websocket.send(buf)
@@ -169,13 +193,15 @@ with mic_rt_tab:
                 media_stream_constraints={"video": False, "audio": True},
             )
 
+
             st.divider()
             with st.container(horizontal=True, horizontal_alignment="distribute"):
                 with st.popover("Settings"):
-                    st.write("WIP")
-                    # Scelta del linguaggio
-                    # st.session_state.lang = st.selectbox("Seleziona lingua", key="mic_rt_chosen_lang", options=["Italian", "English"])
+                    new_length = st.number_input("Target buffer length in ms", min_value=200, max_value=1000, value=config.get_target_length(), step=20)
 
+                    config.set_target_length(new_length)
+
+                    st.write("WIP")
                     # Scelta della task
                     # task_scelta = st.radio("Seleziona Task", key="mic_rt_chosen_task", options=["ASR"])
 
