@@ -68,7 +68,9 @@ async def lifespan(app: FastAPI):
     UPLOAD_DIR = Path("uploads")
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    for lang in ["it", "en"]:
+    for lang in ["it", 
+    #"en"
+    ]:
         args = get_args([], "Italian")
         model, inf, valid_len, dev = await load_model(args)
         print(f"{lang}-model loaded")
@@ -183,9 +185,17 @@ async def handle_chunk(
     return {"result": transc, "session_id": session_id}
 
 
+exit = 5
+
+@app.post('/set_exit/')
+def set_exit(new_exit: int = Form(5)):
+    global exit
+    exit = new_exit
+    print(f'{exit=}')
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global session_cnt
+    global session_cnt, exit
     global rt_args, rt_model, rt_valid_len, rt_inf, rt_dev
 
     s = sessions.get(str(session_cnt + 1))
@@ -196,9 +206,9 @@ async def websocket_endpoint(websocket: WebSocket):
         sessions[session_id] = s
 
     await websocket.accept()
-    # TO FIX for multiple stop/start sessions
     while True:
         message = await websocket.receive()
+        print(f'{message=}')
 
         if "text" in message and message["text"] is not None:
             text = message["text"]
@@ -217,7 +227,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
                 print(f"{s.buffer=}")
                 await websocket.send_text(transc)
-                break
+                s = Session()
+                session_cnt += 1
+                session_id = str(session_cnt)
+                sessions[session_id] = s
+                continue
 
         elif "bytes" in message and message["bytes"] is not None:
             audio = message["bytes"]
@@ -231,7 +245,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 data=audio,
                 buffer=s.buffer,
                 final=False,
+                exit=5,
             )
+
+            print(f'{transc=}')
 
             await websocket.send_text(transc)
 

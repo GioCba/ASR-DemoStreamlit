@@ -210,8 +210,6 @@ def handler(
         exit = max(0, exit)
         exit = min(5, exit)
 
-    print(f"{exit=}")
-
     # CPU MODE ONLY
     global speech_detected
     global count_silent_frames
