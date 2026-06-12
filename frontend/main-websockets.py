@@ -294,7 +294,7 @@ def file_tab_fn(mic_mode=False, key=""):
             else:
                 file = st.file_uploader(
                     "Upload file",
-                    type=[".wav", ".ogg", ".flac"],
+                    type="audio",
                     label_visibility="collapsed",
                 )
 
