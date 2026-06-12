@@ -1,3 +1,4 @@
+import json
 import shutil
 import time
 from contextlib import asynccontextmanager
@@ -60,6 +61,7 @@ langs = {
 
 models = {}
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model_loaded
@@ -68,9 +70,7 @@ async def lifespan(app: FastAPI):
     UPLOAD_DIR = Path("uploads")
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    for lang in ["it", 
-    #"en"
-    ]:
+    for lang in ["it", "en"]:
         args = get_args([], "Italian")
         model, inf, valid_len, dev = await load_model(args)
         print(f"{lang}-model loaded")
@@ -150,6 +150,7 @@ class Session:
 sessions = {}
 session_cnt = 0
 
+
 @app.post("/chunks/")
 async def handle_chunk(
     file: Annotated[bytes, File()],
@@ -160,7 +161,6 @@ async def handle_chunk(
 ):
     global session_cnt
     m = models[lang]
-    
 
     s = sessions.get(session_id)
     if s is None:
@@ -187,54 +187,28 @@ async def handle_chunk(
 
 exit = 5
 
-@app.post('/set_exit/')
+
+@app.post("/set_exit/")
 def set_exit(new_exit: int = Form(5)):
     global exit
     exit = new_exit
-    print(f'{exit=}')
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global session_cnt, exit
     global rt_args, rt_model, rt_valid_len, rt_inf, rt_dev
 
-    s = sessions.get(str(session_cnt + 1))
-    if s is None:
-        s = Session()
-        session_cnt += 1
-        session_id = str(session_cnt)
-        sessions[session_id] = s
+    s = Session()
 
     await websocket.accept()
     while True:
         message = await websocket.receive()
-        print(f'{message=}')
 
-        if "text" in message and message["text"] is not None:
-            text = message["text"]
-
-            if text == "SENTINEL":
-                transc, s.buffer = handler(
-                    rt_args,
-                    rt_model,
-                    rt_valid_len,
-                    rt_inf,
-                    rt_dev,
-                    data=None,
-                    buffer=s.buffer,
-                    final=True,
-                    exit=exit,
-                )
-                print(f"{s.buffer=}")
-                await websocket.send_text(transc)
-                s = Session()
-                session_cnt += 1
-                session_id = str(session_cnt)
-                sessions[session_id] = s
-                continue
-
-        elif "bytes" in message and message["bytes"] is not None:
+        if "bytes" in message and message["bytes"] is not None:
             audio = message["bytes"]
+
+            final = len(audio) == 0
 
             transc, s.buffer = handler(
                 rt_args,
@@ -244,13 +218,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 rt_dev,
                 data=audio,
                 buffer=s.buffer,
-                final=False,
-                exit=5,
+                final=final,
+                exit=exit,
             )
 
-            print(f'{transc=}')
+            if transc:
+                await websocket.send_text(
+                    json.dumps({"result": transc, "final": final}).encode("utf-8")
+                )
+            else:
+                pass
 
-            await websocket.send_text(transc)
+            if final:
+                return
 
 
 async def load_model(args):

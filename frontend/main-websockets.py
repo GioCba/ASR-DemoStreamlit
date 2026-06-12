@@ -1,4 +1,5 @@
 import datetime
+import json
 import queue
 import threading
 import time
@@ -10,7 +11,7 @@ import streamlit as st
 import webrtcvad
 from scipy.signal import resample
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
-from websockets.sync.client import connect
+from websockets.sync.client import ClientConnection, connect
 
 
 class SharedConfig:
@@ -27,6 +28,7 @@ class SharedConfig:
             return self._target_length_ms
 
 
+# To fix, right now config._target_length_ms is always 500 because streamlit reruns the whole script every time and 500 is default val
 config = SharedConfig()
 
 
@@ -45,16 +47,16 @@ if "transcripted_text" not in st.session_state:
     st.session_state["transcripted_text"] = ""
 if "exit" not in st.session_state:
     st.session_state["exit"] = "All"
+if "rt_exit" not in st.session_state:
+    st.session_state["rt_exit"] = "All"    
 if "realtime_content" not in st.session_state:
     st.session_state["realtime_content"] = [""] * 6
 if "model_loaded" not in st.session_state:
     st.session_state["model_loaded"] = None
 if "audio_started" not in st.session_state:
     st.session_state["audio_started"] = False
-if "done" not in st.session_state:
-    st.session_state["done"] = False
-if "rt_exit" not in st.session_state:
-    st.session_state.rt_exit = "All"
+if "finished" not in st.session_state:
+    st.session_state["finished"] = True
 
 AUDIO_DIR = "user_files/"
 file_to_transcript = ""
@@ -81,9 +83,6 @@ def get_finish_queue():
 update_queue = get_update_queue()
 audio_queue = get_audio_queue()
 finish_queue = get_finish_queue()
-
-if "finished" not in st.session_state:
-    st.session_state["finished"] = None
 
 vad = webrtcvad.Vad(0)
 
@@ -112,56 +111,38 @@ def on_audio_ended():
     get_finish_queue().put(True)
 
 
-try:
-    print(f'{st.session_state.rt_exit}')
-    chosen_rt_exit = int(st.session_state.rt_exit)
-except ValueError:
-    chosen_rt_exit = 99
+def receiver_worker(update_queue, ws):
+    try:
+        while True:
+            msg = ws.recv()
+            update_queue.put(json.loads(msg))
+    except Exception as e:
+        print("Receiver stopped:", e)
 
-
-print(f'{chosen_rt_exit=}')
 
 def sender_worker(audio_queue):
-    buf = bytearray()
+    receiver_thread: threading.Thread | None = None
+    ws: ClientConnection | None = None
 
-    # f = open("out.raw", 'wb')
-    with connect("ws://127.0.0.1:8000/ws") as websocket:
-        while True:
-            try:
-                data = audio_queue.get()
+    while True:
+        try:
+            data = audio_queue.get()
+        except queue.Empty:
+            continue
 
-                target_ms = config.get_target_length()
-                target_len = int((target_ms * 640) / 20)
-                if isinstance(data, str) and data == SENTINEL:
-                    if len(buf) > 0:
-                        websocket.send(buf)
-                        update_queue.put_nowait(websocket.recv())
-                        buf = bytearray()
-                    websocket.send(data)
-                    msg = websocket.recv()
-                    update_queue.put_nowait(msg)
-                    print("sentinel recv")
-                    print("stopped sending")
-                    continue
-                else:
-                    audio_16 = data
+        if ws is None:
+            ws = connect("ws://127.0.0.1:8000/ws")
+            receiver_thread = threading.Thread(
+                target=receiver_worker, args=(update_queue, ws)
+            )
+            receiver_thread.start()
 
-                    print(audio_16)
-
-                    raw_data = audio_16.tobytes()
-
-                    buf.extend(raw_data)
-
-                    if len(buf) >= 8000:
-                        print('sending')
-                        websocket.send(buf)
-                        message = websocket.recv()
-                        print(f'{message=}')
-                        update_queue.put_nowait(message)
-                        buf = bytearray()
-                    continue
-            except queue.Empty:
-                continue
+        if isinstance(data, str) and data == SENTINEL:
+            ws.send(b"")
+            ws = None
+        else:
+            audio_16 = data
+            ws.send(audio_16.tobytes())
 
 
 if "worker_thread" not in st.session_state:
@@ -227,71 +208,64 @@ with mic_rt_tab:
 
             st.divider()
             with st.container(horizontal=True, horizontal_alignment="distribute"):
-                with st.popover("Settings"):
-                    new_length = st.number_input(
-                        "Target buffer length in ms",
-                        min_value=200,
-                        max_value=1000,
-                        value=config.get_target_length(),
-                        step=40,
-                    )
+                new_length = st.number_input(
+                    "Target buffer length in ms",
+                    min_value=200,
+                    max_value=1000,
+                    value=config.get_target_length(),
+                    step=40,
+                )
 
-                    config.set_target_length(new_length)
+                config.set_target_length(new_length)
 
-                    st.session_state.lang = st.selectbox(
-                        "Seleziona lingua",
-                        key="mic_rt_chosen_lang",
-                        options=["it", "en"],
-                    )
+                st.session_state.lang = st.selectbox(
+                    "Seleziona lingua",
+                    key="mic_rt_chosen_lang",
+                    options=["it", "en"],
+                )
 
-                    # Scelta dell'uscita
-                    st.session_state.rt_exit = st.selectbox(
-                        "Scegli l'uscita", key="mic_rt_chosen_exit", options=["All", "1", "2", "3", "4", "5", "6"]
-                    )
+                # Scelta dell'uscita
+                st.session_state.exit = st.selectbox(
+                    "Scegli l'uscita",
+                    key="mic_rt_chosen_exit",
+                    options=["All", "1", "2", "3", "4", "5", "6"],
+                )
 
             if ctx.state.playing and not st.session_state["audio_started"]:
+                st.session_state.realtime_content = [""] * 6
+                st.session_state.rt_exit = int(st.session_state.exit) - 1 if st.session_state.exit != "All" else 99
                 st.session_state["audio_started"] = True
                 resp = requests.post(
                     "http://127.0.0.1:8000/model_specs/",
                     data={"lang": st.session_state.lang},
                 )
-                requests.post('http://127.0.0.1:8000/set_exit/', data={'new_exit': chosen_rt_exit})
-                
-
+                requests.post(
+                    "http://127.0.0.1:8000/set_exit/", data={"new_exit": st.session_state.rt_exit}
+                )
             st.divider()
-            
-            history_box1 = st.empty()
-            history_box2 = st.empty()
-            history_box3 = st.empty()
-            history_box4 = st.empty()
-            history_box5 = st.empty()
-            history_box6 = st.empty()
 
-            history_boxes = [
-                history_box1,
-                history_box2,
-                history_box3,
-                history_box4,
-                history_box5,
-                history_box6,
-            ]
+            history_boxes = [st.empty() for _ in range(6)]
 
             transcript = ""
 
             poll_interval = 0.2
             while ctx.state.playing:
                 try:
-                    while True:
-                        resp_json = update_queue.get_nowait()
-                        text = resp_json.get("result", "")
-                        if text:
-                            for i in range(len(history_boxes)):
-                                transcript += text[i]["text"] + " "
-                                history_boxes[i].write(f"Exit {text[i]['exit']}: {transcript}")
-                                st.session_state["realtime_content"][i] += transcript + " "
+                    resp_json = update_queue.get_nowait()
+                    result = resp_json.get("result", [])
+                    print(f'{result=}')
+                    for r in result:
+                        text = r["text"]
+                        exit = r["exit"]
+                        st.session_state["realtime_content"][exit] += text + " "
                 except queue.Empty:
-                    # Fallback, to fix
-                    history_box1.write(transcript)
+                    pass
+
+                if st.session_state.rt_exit == 99:
+                    for i, hb in enumerate(history_boxes):
+                        hb.write(f"Exit {i+1}: {st.session_state['realtime_content'][i]}")
+                else:
+                    history_boxes[0].write(f"Exit {st.session_state.rt_exit + 1}: {st.session_state['realtime_content'][st.session_state.rt_exit]}")
 
                 time.sleep(poll_interval)
 
@@ -300,49 +274,41 @@ with mic_rt_tab:
             try:
                 st.session_state["finished"] = finish_queue.get_nowait()
             except queue.Empty:
-                st.session_state["finished"] = None
+                st.session_state["finished"] = True
 
             # After stopping
             if st.session_state["finished"]:
                 try:
-                    st.session_state.done = st.session_state["finished"]
-                    resp_json = update_queue.get_nowait()
-                    text = resp_json.get("result", "")
-                    if st.session_state.rt_exit == "All":
-                        for i in range(len(st.session_state.realtime_content)):
-                            st.session_state.realtime_content[i] += text[i]['text'] + " "
-                            st.write(
-                                f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
-                            )
-                    else:
-                        st.session_state.realtime_content[st.session_state.rt_exit-1] += text[st.session_state.rt_exit-1]['text'] + " "
-                        st.write(
-                            f"Exit {st.session_state.rt_exit}: {st.session_state.realtime_content[i]}"
-                        )
                     st.session_state["audio_started"] = False
-                except queue.Empty:
-                    if st.session_state.rt_exit == "All":
-                        for i in range(len(st.session_state.realtime_content)):
-                            st.write(
-                                f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
-                            )
+                    resp_json = update_queue.get_nowait()
+                    result = resp_json.get("result", [])
+                    if st.session_state.rt_exit == 99:
+                        for r in result:
+                            text = r["text"]
+                            exit = r["exit"]
+                            st.session_state["realtime_content"][exit] += text
+                        
+                            for i in range(len(st.session_state.realtime_content)):
+                                st.session_state.realtime_content[i] += (
+                                    text + " "
+                                )
+                                st.write(
+                                    f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
+                                )
                     else:
+                        st.session_state.realtime_content[st.session_state.rt_exit] += result[0]["text"] + " "
                         st.write(
-                            f"Exit {st.session_state.rt_exit}: {st.session_state.realtime_content[st.session_state.rt_exit-1]}"
+                            f"Exit {st.session_state.rt_exit + 1}: {st.session_state.realtime_content[st.session_state.rt_exit]}"
                         )
-                        # To prevent overwriting the transcription because of streamlit's reloading of the script
-            else:
-                if st.session_state.rt_exit == "All":
-                    for i in range(len(st.session_state.realtime_content)):
-                        st.write(
-                            f"Exit {i+ 1}: {st.session_state.realtime_content[i]}"
-                        )
-                else:
-                    st.write(f"Exit {st.session_state.rt_exit}: {st.session_state.realtime_content[int(st.session_state.rt_exit)-1]}")
-                    
-
+                except queue.Empty:
+                    if st.session_state.rt_exit == 99:
+                        for i in range(6):
+                            st.write(f"Exit {i+1}: {st.session_state.realtime_content[i]}")
+                    else:
+                        st.write(f"Exit {st.session_state.rt_exit+1}: {st.session_state.realtime_content[st.session_state.rt_exit]}")
         else:
-            st.warning("Carica il modello dalla sidebar")
+            st.warning("Load model from sidebar")
+
 
 def file_tab_fn(mic_mode=False, key=""):
 
