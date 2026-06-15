@@ -26,8 +26,9 @@ class SharedConfig:
             return self._target_length_ms
 
 
-# TO FIX, streamlit reruns the script everytime the user touches anything, so buf length is always 500ms
-config = SharedConfig()
+if "config" not in st.session_state:
+    st.session_state["config"] = SharedConfig()
+config = st.session_state.config
 
 ####################################
 # Variables
@@ -64,24 +65,11 @@ file_to_transcript = ""
 SENTINEL = "STOP"
 
 
-@st.cache_resource
-def get_audio_queue():
-    return queue.Queue()
+if "queues" not in st.session_state:
+    st.session_state["queues"] = queue.Queue(), queue.Queue()
 
 
-@st.cache_resource
-def get_update_queue():
-    return queue.Queue()
-
-
-@st.cache_resource
-def get_finish_queue():
-    return queue.Queue()
-
-
-update_queue = get_update_queue()
-audio_queue = get_audio_queue()
-finish_queue = get_finish_queue()
+audio_queue, update_queue = st.session_state.queues
 
 
 vad = webrtcvad.Vad(2)
@@ -108,7 +96,6 @@ def audio_frame_callback(frame: av.AudioFrame):
 
 def on_audio_ended():
     get_audio_queue().put(SENTINEL)
-    get_finish_queue().put(True)
 
 
 def sender_worker(audio_queue):
@@ -258,16 +245,16 @@ with mic_rt_tab:
 
             st.divider()
             with st.container(horizontal=True, horizontal_alignment="distribute"):
-                # WIP
-                # new_length = st.number_input(
-                #     "Target buffer length in ms",
-                #     min_value=200,
-                #     max_value=1000,
-                #     value=config.get_target_length(),
-                #     step=20,
-                # )
+                new_length = st.number_input(
+                    "Target buffer length in ms",
+                    min_value=200,
+                    max_value=1000,
+                    value=config.get_target_length(),
+                    step=20,
+                )
 
-                # config.set_target_length(new_length)
+                config.set_target_length(new_length)
+
                 # Scelta del linguaggio
                 st.session_state.lang = st.selectbox(
                     "Seleziona lingua",
@@ -328,10 +315,7 @@ with mic_rt_tab:
 
             final_boxes = [st.empty() for _ in range(6)]
 
-            try:
-                st.session_state["finished"] = finish_queue.get_nowait()
-            except queue.Empty:
-                st.session_state["finished"] = True
+            st.session_state["finished"] = True
 
             # After stopping
             if st.session_state["finished"]:
