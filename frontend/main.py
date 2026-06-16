@@ -16,10 +16,15 @@ class SharedConfig:
         self._lock = threading.Lock()
         self._target_length_ms = 500
         self._chosen_exit = 99
+        self._chosen_lang = "it"
 
     def set_target_length(self, value):
         with self._lock:
             self._target_length_ms = value
+
+    def set_chosen_lang(self, value):
+        with self._lock:
+            self._chosen_lang = value
 
     def set_target_exit(self, value: str):
         with self._lock:
@@ -32,6 +37,10 @@ class SharedConfig:
     def get_target_exit(self):
         with self._lock:
             return self._chosen_exit
+
+    def get_chosen_lang(self):
+        with self._lock:
+            return self._chosen_lang
 
 
 if "config" not in st.session_state:
@@ -117,6 +126,7 @@ def sender_worker(audio_queue):
             target_ms = config.get_target_length()
             target_len = int(target_ms * 640 / 20)
             chosen_exit = config.get_target_exit()
+            chosen_lang = config.get_chosen_lang()
             if isinstance(data, str) and data == SENTINEL:
                 files = {
                     "file": (
@@ -131,7 +141,7 @@ def sender_worker(audio_queue):
                 if session_id:
                     params["session_id"] = session_id
                     params["final"] = True
-                    params["lang"] = "it"
+                    params["lang"] = chosen_lang
                     params["exit"] = chosen_exit
 
                 response = requests.post(
@@ -157,7 +167,7 @@ def sender_worker(audio_queue):
             if len(buf) >= target_len:
                 files = {
                     "file": (
-                        "microfono.part0",
+                        "microfono.part",
                         buf,
                         "application/octet-stream",
                     )
@@ -168,7 +178,7 @@ def sender_worker(audio_queue):
                 if session_id:
                     params["session_id"] = session_id
 
-                params["lang"] = "it"
+                params["lang"] = chosen_lang
                 params["final"] = False
                 params["exit"] = chosen_exit
 
@@ -263,6 +273,7 @@ with mic_rt_tab:
 
         if ctx.state.playing and not st.session_state["audio_started"]:
             config.set_target_exit(rt_exit)
+            config.set_chosen_lang(st.session_state.lang)
             st.session_state.realtime_content = [""] * 6
             st.session_state["audio_started"] = True
 
@@ -273,7 +284,8 @@ with mic_rt_tab:
         transcript = ""
 
         chosen_exit = config.get_target_exit()
-
+        chosen_lang = config.get_chosen_lang()
+        
         poll_interval = 0.2
         while ctx.state.playing:
             try:

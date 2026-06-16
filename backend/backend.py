@@ -182,7 +182,6 @@ async def handle_chunk(
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, exit: int = 5, lang: str = "it"):
-    print(f"Inside backend: {exit=}")
     global session_cnt
 
     m = models[lang]
