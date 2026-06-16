@@ -85,15 +85,16 @@ async def lifespan(app: FastAPI):
 
     yield
     print("App is shutting down...")
-    if UPLOAD_DIR.exists():
-        for item in UPLOAD_DIR.iterdir():
-            try:
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
-            except Exception:
-                pass
+    # Keep files stored after each shutdown of the server
+    # if UPLOAD_DIR.exists():
+    #     for item in UPLOAD_DIR.iterdir():
+    #         try:
+    #             if item.is_dir():
+    #                 shutil.rmtree(item)
+    #             else:
+    #                 item.unlink()
+    #         except Exception:
+    #             pass
 
 
 app = FastAPI(lifespan=lifespan)

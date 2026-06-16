@@ -74,13 +74,12 @@ if "done" not in st.session_state:
     st.session_state["done"] = False
 if "finished" not in st.session_state:
     st.session_state["finished"] = True
+if "file_ctr" not in st.session_state:
+    st.session_state.file_ctr = 0
 
-AUDIO_DIR = "user_files/"
 file_to_transcript = ""
 
-
 SENTINEL = "STOP"
-
 
 if "queues" not in st.session_state:
     st.session_state["queues"] = queue.Queue(), queue.Queue()
@@ -285,7 +284,7 @@ with mic_rt_tab:
 
         chosen_exit = config.get_target_exit()
         chosen_lang = config.get_chosen_lang()
-        
+
         poll_interval = 0.2
         while ctx.state.playing:
             try:
@@ -392,7 +391,10 @@ def file_tab_fn(mic_mode=False, key=""):
                 ):
                     file_to_transcript = file
                     if file_to_transcript is not None:
-                        file_to_transcript.name = "user_file.wav"
+                        file_to_transcript.name = (
+                            f"user_file_{st.session_state.file_ctr}.wav"
+                        )
+                        st.session_state.file_ctr += 1
                         files = {
                             "file": (
                                 file_to_transcript.name,
