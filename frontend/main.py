@@ -16,14 +16,23 @@ class SharedConfig:
     def __init__(self):
         self._lock = threading.Lock()
         self._target_length_ms = 500
+        self._chosen_exit = 99
 
     def set_target_length(self, value):
         with self._lock:
             self._target_length_ms = value
 
+    def set_target_exit(self, value: str):
+        with self._lock:
+            self._chosen_exit = int(value) - 1 if value != "All" else 99
+
     def get_target_length(self):
         with self._lock:
             return self._target_length_ms
+
+    def get_target_exit(self):
+        with self._lock:
+            return self._chosen_exit
 
 
 if "config" not in st.session_state:
@@ -95,7 +104,7 @@ def audio_frame_callback(frame: av.AudioFrame):
 
 
 def on_audio_ended():
-    get_audio_queue().put(SENTINEL)
+    audio_queue.put(SENTINEL)
 
 
 def sender_worker(audio_queue):
@@ -109,6 +118,7 @@ def sender_worker(audio_queue):
 
             target_ms = config.get_target_length()
             target_len = int(target_ms * 640 / 20)
+            chosen_exit = config.get_target_exit()
             if isinstance(data, str) and data == SENTINEL:
                 print("sentinel recv")
                 if f is not None:
@@ -129,6 +139,7 @@ def sender_worker(audio_queue):
                     params["session_id"] = session_id
                     params["final"] = True
                     params["lang"] = "it"
+                    params["exit"] = chosen_exit
 
                 response = requests.post(
                     URL,
@@ -166,6 +177,7 @@ def sender_worker(audio_queue):
 
                 params["lang"] = "it"
                 params["final"] = False
+                params["exit"] = chosen_exit
 
                 response = requests.post(
                     URL,
@@ -262,30 +274,24 @@ with mic_rt_tab:
                     options=["it", "en"],
                 )
 
-                st.session_state.exit = st.selectbox(
+                rt_exit = st.selectbox(
                     "Scegli l'uscita",
                     key="mic_rt_chosen_exit",
                     options=["All", "1", "2", "3", "4", "5", "6"],
                 )
 
             if ctx.state.playing and not st.session_state["audio_started"]:
+                config.set_target_exit(rt_exit)
                 st.session_state.realtime_content = [""] * 6
-                st.session_state.rt_exit = (
-                    int(st.session_state.exit) - 1
-                    if st.session_state.exit != "All"
-                    else 99
-                )
                 st.session_state["audio_started"] = True
-                requests.post(
-                    "http://127.0.0.1:8000/set_exit/",
-                    data={"new_exit": st.session_state.rt_exit},
-                )
 
             st.divider()
 
             history_boxes = [st.empty() for _ in range(6)]
 
             transcript = ""
+
+            chosen_exit = config.get_target_exit()
 
             poll_interval = 0.2
             while ctx.state.playing:
@@ -297,17 +303,15 @@ with mic_rt_tab:
                         exit = r["exit"]
                         st.session_state["realtime_content"][exit] += text + " "
                 except queue.Empty:
-                    pass
-
-                if st.session_state.rt_exit == 99:
-                    for i, hb in enumerate(history_boxes):
-                        hb.write(
-                            f"Exit {i + 1}: {st.session_state['realtime_content'][i]}"
+                    if chosen_exit == 99:
+                        for i, hb in enumerate(history_boxes):
+                            hb.write(
+                                f"Exit {i + 1}: {st.session_state['realtime_content'][i]}"
+                            )
+                    else:
+                        history_boxes[0].write(
+                            f"Exit {chosen_exit + 1}: {st.session_state['realtime_content'][chosen_exit]}"
                         )
-                else:
-                    history_boxes[0].write(
-                        f"Exit {st.session_state.rt_exit + 1}: {st.session_state['realtime_content'][st.session_state.rt_exit]}"
-                    )
 
                 time.sleep(poll_interval)
 
@@ -315,15 +319,13 @@ with mic_rt_tab:
 
             final_boxes = [st.empty() for _ in range(6)]
 
-            st.session_state["finished"] = True
-
             # After stopping
             if st.session_state["finished"]:
                 try:
                     st.session_state["audio_started"] = False
                     resp_json = update_queue.get_nowait()
                     result = resp_json.get("result", [])
-                    if st.session_state.rt_exit == 99:
+                    if chosen_exit == 99:
                         for r in result:
                             text = r["text"]
                             exit = r["exit"]
@@ -335,28 +337,24 @@ with mic_rt_tab:
                                     f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
                                 )
                     else:
-                        st.session_state.realtime_content[st.session_state.rt_exit] += (
+                        chosen_exit = result[0]["exit"]
+                        st.session_state.realtime_content[chosen_exit] += (
                             result[0]["text"] + " "
                         )
                         final_boxes[0].write(
-                            f"Exit {st.session_state.rt_exit + 1}: {st.session_state.realtime_content[st.session_state.rt_exit]}"
+                            f"Exit {chosen_exit + 1}: {st.session_state.realtime_content[chosen_exit]}"
                         )
                 except queue.Empty:
-                    pass
+                    if chosen_exit == 99:
+                        for i in range(len(st.session_state.realtime_content)):
+                            final_boxes[i].write(
+                                f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
+                            )
+                    else:
+                        final_boxes[0].write(
+                            f"Exit {chosen_exit + 1}: {st.session_state.realtime_content[chosen_exit]}"
+                        )
 
-            st.session_state.rt_exit = (
-                int(st.session_state.exit) - 1 if st.session_state.exit != "All" else 99
-            )
-
-            if st.session_state.rt_exit == 99:
-                for i in range(len(st.session_state.realtime_content)):
-                    final_boxes[i].write(
-                        f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
-                    )
-            else:
-                final_boxes[0].write(
-                    f"Exit {int(st.session_state.rt_exit) + 1}: {st.session_state.realtime_content[st.session_state.rt_exit]}"
-                )
         else:
             st.warning("Load model from sidebar")
 

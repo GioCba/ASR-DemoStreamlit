@@ -173,9 +173,9 @@ async def handle_chunk(
     session_id: str | None = Form(None),
     final: bool | None = Form(None),
     lang: str = Form("it"),
+    exit: int = Form(5),
 ):
-    global session_cnt, exit
-    print(f"{exit=}")
+    global session_cnt
     m = models[lang]
 
     s = sessions.get(session_id)
@@ -184,7 +184,6 @@ async def handle_chunk(
         session_cnt += 1
         session_id = str(session_cnt)
         sessions[session_id] = s
-        print(f"{session_id=}")
 
     transc, s.buffer = handler(
         m.args,
