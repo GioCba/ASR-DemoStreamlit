@@ -9,8 +9,9 @@ There are 3 main features:
 Currently the only supported model is this one https://huggingface.co/SpeechTek/Italian-EE-conformer and its english counterpart.
 
 ## How to run
-Advice: I developed this is a virtual enviroment with python 3.11.14.
+**N.B.** To run this application install and use Python 3.11, to develop this I personally used Python 3.11.14.
 - Clone the repository
+- Create a virtual environment with ```python3.11 -m venv .venv```
 - Inside of /backend, put both models' directories
 - Install the the requirements with ```pip install -r requirements.txt``` in the root directory
 - Open a second terminal, with the same virtual enviroment
