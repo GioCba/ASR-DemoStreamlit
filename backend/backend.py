@@ -97,13 +97,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-model_loaded: bool = False
-
-
-@app.get("/model_info")
-def get_model_info():
-    return {"state": model_loaded}
-
 
 ALL_EXITS = 99
 
@@ -143,19 +136,6 @@ async def upload(
         )
 
     return {"result": transc}
-
-
-@app.post("/model_specs/")
-async def model_specs(lang: str = Form("it")):
-    global rt_model, rt_args, rt_valid_len, rt_inf, rt_dev
-    m = models[lang]
-    rt_args, rt_model, rt_inf, rt_valid_len, rt_dev = (
-        m.args,
-        m.model,
-        m.inf,
-        m.valid_len,
-        m.dev,
-    )
 
 
 class Session:
@@ -198,15 +178,6 @@ async def handle_chunk(
     )
 
     return {"result": transc, "session_id": session_id}
-
-
-exit = 5
-
-
-@app.post("/set_exit/")
-def set_exit(new_exit: int = Form(5)):
-    global exit
-    exit = new_exit
 
 
 @app.websocket("/ws")

@@ -111,7 +111,6 @@ def sender_worker(audio_queue):
     buf = bytearray()
     URL = "http://127.0.0.1:8000/chunks/"
     session_id = None
-    f = None
     while True:
         try:
             data = audio_queue.get()
@@ -120,11 +119,6 @@ def sender_worker(audio_queue):
             target_len = int(target_ms * 640 / 20)
             chosen_exit = config.get_target_exit()
             if isinstance(data, str) and data == SENTINEL:
-                print("sentinel recv")
-                if f is not None:
-                    f.close()
-                    f = None
-                print("stopped sending")
                 files = {
                     "file": (
                         "microfono.lastpart",
@@ -226,17 +220,6 @@ st.markdown(
 # UI
 st.title("Transcriber")
 
-# Sidebar
-if not st.session_state["model_loaded"]:
-    with st.sidebar:
-        # Se il server dovesse essere partito ma i modelli non sono caricati
-        resp = requests.get("http://127.0.0.1:8000/model_info")
-        st.session_state.model_loaded = resp.json()["state"]
-
-        if st.session_state.model_loaded:
-            st.success("OK")
-        else:
-            st.error("Error")
 # TABS
 mic_file_tab, file_tab, mic_rt_tab = st.tabs(
     ["Record & Transcribe", "Upload & Transcribe", "Real-Time transcription"]
@@ -246,117 +229,113 @@ with mic_rt_tab:
     with st.container(
         border=True, height="stretch", width="stretch", horizontal_alignment="center"
     ):
-        if st.session_state["model_loaded"]:
-            ctx = webrtc_streamer(
-                key="audio",
-                audio_frame_callback=audio_frame_callback,
-                on_audio_ended=on_audio_ended,
-                mode=WebRtcMode.SENDONLY,
-                media_stream_constraints={"video": False, "audio": True},
+        ctx = webrtc_streamer(
+            key="audio",
+            audio_frame_callback=audio_frame_callback,
+            on_audio_ended=on_audio_ended,
+            mode=WebRtcMode.SENDONLY,
+            media_stream_constraints={"video": False, "audio": True},
+        )
+
+        st.divider()
+        with st.container(horizontal=True, horizontal_alignment="distribute"):
+            new_length = st.number_input(
+                "Target buffer length in ms",
+                min_value=200,
+                max_value=1000,
+                value=config.get_target_length(),
+                step=20,
             )
 
-            st.divider()
-            with st.container(horizontal=True, horizontal_alignment="distribute"):
-                new_length = st.number_input(
-                    "Target buffer length in ms",
-                    min_value=200,
-                    max_value=1000,
-                    value=config.get_target_length(),
-                    step=20,
-                )
+            config.set_target_length(new_length)
 
-                config.set_target_length(new_length)
+            # Scelta del linguaggio
+            st.session_state.lang = st.selectbox(
+                "Seleziona lingua",
+                key="mic_rt_chosen_lang",
+                options=["it", "en"],
+            )
 
-                # Scelta del linguaggio
-                st.session_state.lang = st.selectbox(
-                    "Seleziona lingua",
-                    key="mic_rt_chosen_lang",
-                    options=["it", "en"],
-                )
+            rt_exit = st.selectbox(
+                "Scegli l'uscita",
+                key="mic_rt_chosen_exit",
+                options=["All", "1", "2", "3", "4", "5", "6"],
+            )
 
-                rt_exit = st.selectbox(
-                    "Scegli l'uscita",
-                    key="mic_rt_chosen_exit",
-                    options=["All", "1", "2", "3", "4", "5", "6"],
-                )
+        if ctx.state.playing and not st.session_state["audio_started"]:
+            config.set_target_exit(rt_exit)
+            st.session_state.realtime_content = [""] * 6
+            st.session_state["audio_started"] = True
 
-            if ctx.state.playing and not st.session_state["audio_started"]:
-                config.set_target_exit(rt_exit)
-                st.session_state.realtime_content = [""] * 6
-                st.session_state["audio_started"] = True
+        st.divider()
 
-            st.divider()
+        history_boxes = [st.empty() for _ in range(6)]
 
-            history_boxes = [st.empty() for _ in range(6)]
+        transcript = ""
 
-            transcript = ""
+        chosen_exit = config.get_target_exit()
 
-            chosen_exit = config.get_target_exit()
+        poll_interval = 0.2
+        while ctx.state.playing:
+            try:
+                resp_json = update_queue.get_nowait()
+                result = resp_json.get("result", [])
+                for r in result:
+                    text = r["text"]
+                    exit = r["exit"]
+                    st.session_state["realtime_content"][exit] += text + " "
+            except queue.Empty:
+                if chosen_exit == 99:
+                    for i, hb in enumerate(history_boxes):
+                        hb.write(
+                            f"Exit {i + 1}: {st.session_state['realtime_content'][i]}"
+                        )
+                else:
+                    history_boxes[0].write(
+                        f"Exit {chosen_exit + 1}: {st.session_state['realtime_content'][chosen_exit]}"
+                    )
 
-            poll_interval = 0.2
-            while ctx.state.playing:
-                try:
-                    resp_json = update_queue.get_nowait()
-                    result = resp_json.get("result", [])
+            time.sleep(poll_interval)
+
+        st.divider()
+
+        final_boxes = [st.empty() for _ in range(6)]
+
+        # After stopping
+        if st.session_state["finished"]:
+            try:
+                st.session_state["audio_started"] = False
+                resp_json = update_queue.get_nowait()
+                result = resp_json.get("result", [])
+                if chosen_exit == 99:
                     for r in result:
                         text = r["text"]
                         exit = r["exit"]
-                        st.session_state["realtime_content"][exit] += text + " "
-                except queue.Empty:
-                    if chosen_exit == 99:
-                        for i, hb in enumerate(history_boxes):
-                            hb.write(
-                                f"Exit {i + 1}: {st.session_state['realtime_content'][i]}"
-                            )
-                    else:
-                        history_boxes[0].write(
-                            f"Exit {chosen_exit + 1}: {st.session_state['realtime_content'][chosen_exit]}"
-                        )
+                        st.session_state["realtime_content"][exit] += text
 
-                time.sleep(poll_interval)
-
-            st.divider()
-
-            final_boxes = [st.empty() for _ in range(6)]
-
-            # After stopping
-            if st.session_state["finished"]:
-                try:
-                    st.session_state["audio_started"] = False
-                    resp_json = update_queue.get_nowait()
-                    result = resp_json.get("result", [])
-                    if chosen_exit == 99:
-                        for r in result:
-                            text = r["text"]
-                            exit = r["exit"]
-                            st.session_state["realtime_content"][exit] += text
-
-                            for i in range(len(st.session_state.realtime_content)):
-                                st.session_state.realtime_content[i] += text + " "
-                                final_boxes[i].write(
-                                    f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
-                                )
-                    else:
-                        chosen_exit = result[0]["exit"]
-                        st.session_state.realtime_content[chosen_exit] += (
-                            result[0]["text"] + " "
-                        )
-                        final_boxes[0].write(
-                            f"Exit {chosen_exit + 1}: {st.session_state.realtime_content[chosen_exit]}"
-                        )
-                except queue.Empty:
-                    if chosen_exit == 99:
                         for i in range(len(st.session_state.realtime_content)):
+                            st.session_state.realtime_content[i] += text + " "
                             final_boxes[i].write(
                                 f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
                             )
-                    else:
-                        final_boxes[0].write(
-                            f"Exit {chosen_exit + 1}: {st.session_state.realtime_content[chosen_exit]}"
+                else:
+                    chosen_exit = result[0]["exit"]
+                    st.session_state.realtime_content[chosen_exit] += (
+                        result[0]["text"] + " "
+                    )
+                    final_boxes[0].write(
+                        f"Exit {chosen_exit + 1}: {st.session_state.realtime_content[chosen_exit]}"
+                    )
+            except queue.Empty:
+                if chosen_exit == 99:
+                    for i in range(len(st.session_state.realtime_content)):
+                        final_boxes[i].write(
+                            f"Exit {i + 1}: {st.session_state.realtime_content[i]}"
                         )
-
-        else:
-            st.warning("Load model from sidebar")
+                else:
+                    final_boxes[0].write(
+                        f"Exit {chosen_exit + 1}: {st.session_state.realtime_content[chosen_exit]}"
+                    )
 
 
 def file_tab_fn(mic_mode=False, key=""):
@@ -364,76 +343,71 @@ def file_tab_fn(mic_mode=False, key=""):
     with st.container(
         border=True, height="stretch", width="stretch", horizontal_alignment="center"
     ):
-        if True:  # st.session_state["model_loaded"]:
-            if mic_mode:
-                file = st.audio_input(
-                    "Audio", label_visibility="collapsed", sample_rate=16000
-                )
-            else:
-                file = st.file_uploader(
-                    "Upload file",
-                    type="audio",
-                    label_visibility="collapsed",
-                )
-
-            st.session_state.is_transcripted = False
-
-            st.divider()
-
-            with st.container(horizontal=True, horizontal_alignment="distribute"):
-                with st.popover("Settings"):
-                    # language selection
-                    st.session_state.lang = st.selectbox(
-                        "Select language",
-                        key=f"{key}_file_chosen_lang",
-                        options=["it", "en"],
-                    )
-
-                    # Exit selection
-                    exit = st.selectbox(
-                        "Select exit",
-                        key=f"{key}_file_chosen_exit",
-                        options=["All", "1", "2", "3", "4", "5", "6"],
-                    )
-                    st.session_state.exit = int(exit) - 1 if exit != "All" else 99
-
-                with st.container(horizontal_alignment="center", width="content"):
-                    if st.button(
-                        "Transcribe", key=f"{key}_file_transcribe_btn", type="tertiary"
-                    ):
-                        file_to_transcript = file
-                        if file_to_transcript is not None:
-                            file_to_transcript.name = "user_file.wav"
-                            files = {
-                                "file": (
-                                    file_to_transcript.name,
-                                    file_to_transcript,
-                                    "audio/wav",
-                                )
-                            }
-                            params = {
-                                "lang": st.session_state.lang,
-                                "exit": st.session_state.exit,
-                            }
-                            resp = requests.post(
-                                "http://127.0.0.1:8000/uploads/",
-                                files=files,
-                                data=params,
-                            )
-                            st.session_state["transcripted_text"] = resp.json()[
-                                "result"
-                            ]
-                            st.session_state.is_transcripted = True
-                        else:
-                            st.error("Nulla da trascrivere")
-
-            st.divider()
-
-            transc = st.session_state["transcripted_text"]
-            for t in transc:
-                st.write(f"Exit {t['exit'] + 1}: {t['text']}")
+        if mic_mode:
+            file = st.audio_input(
+                "Audio", label_visibility="collapsed", sample_rate=16000
+            )
         else:
-            st.warning("Load model from sidebar")
+            file = st.file_uploader(
+                "Upload file",
+                type="audio",
+                label_visibility="collapsed",
+            )
+
+        st.session_state.is_transcripted = False
+
+        st.divider()
+
+        with st.container(horizontal=True, horizontal_alignment="distribute"):
+            with st.popover("Settings"):
+                # language selection
+                st.session_state.lang = st.selectbox(
+                    "Select language",
+                    key=f"{key}_file_chosen_lang",
+                    options=["it", "en"],
+                )
+
+                # Exit selection
+                exit = st.selectbox(
+                    "Select exit",
+                    key=f"{key}_file_chosen_exit",
+                    options=["All", "1", "2", "3", "4", "5", "6"],
+                )
+                st.session_state.exit = int(exit) - 1 if exit != "All" else 99
+
+            with st.container(horizontal_alignment="center", width="content"):
+                if st.button(
+                    "Transcribe", key=f"{key}_file_transcribe_btn", type="tertiary"
+                ):
+                    file_to_transcript = file
+                    if file_to_transcript is not None:
+                        file_to_transcript.name = "user_file.wav"
+                        files = {
+                            "file": (
+                                file_to_transcript.name,
+                                file_to_transcript,
+                                "audio/wav",
+                            )
+                        }
+                        params = {
+                            "lang": st.session_state.lang,
+                            "exit": st.session_state.exit,
+                        }
+                        resp = requests.post(
+                            "http://127.0.0.1:8000/uploads/",
+                            files=files,
+                            data=params,
+                        )
+                        st.session_state["transcripted_text"] = resp.json()["result"]
+                        st.session_state.is_transcripted = True
+                    else:
+                        st.error("Nulla da trascrivere")
+
+        st.divider()
+
+        transc = st.session_state["transcripted_text"]
+        for t in transc:
+            st.write(f"Exit {t['exit'] + 1}: {t['text']}")
 
 
 with file_tab:
