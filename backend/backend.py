@@ -181,9 +181,11 @@ async def handle_chunk(
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    global session_cnt, exit
-    global rt_args, rt_model, rt_valid_len, rt_inf, rt_dev
+async def websocket_endpoint(websocket: WebSocket, exit: int = 5, lang: str = "it"):
+    print(f"Inside backend: {exit=}")
+    global session_cnt
+
+    m = models[lang]
 
     s = Session()
 
@@ -197,11 +199,11 @@ async def websocket_endpoint(websocket: WebSocket):
             final = len(audio) == 0
 
             transc, s.buffer = handler(
-                rt_args,
-                rt_model,
-                rt_valid_len,
-                rt_inf,
-                rt_dev,
+                m.args,
+                m.model,
+                m.valid_len,
+                m.inf,
+                m.dev,
                 data=audio,
                 buffer=s.buffer,
                 final=final,

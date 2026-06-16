@@ -7,7 +7,6 @@ import numpy as np
 import requests
 import streamlit as st
 import webrtcvad
-from pandas._libs.tslibs.nattype import iNaT
 from scipy.signal import resample
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
