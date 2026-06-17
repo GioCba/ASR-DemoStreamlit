@@ -5,6 +5,7 @@ import time
 import av
 import numpy as np
 import requests
+import sounddevice as sd
 import streamlit as st
 import webrtcvad
 from scipy.signal import resample
@@ -76,6 +77,8 @@ if "finished" not in st.session_state:
     st.session_state["finished"] = True
 if "file_ctr" not in st.session_state:
     st.session_state.file_ctr = 0
+if "gain" not in st.session_state:
+    st.session_state.gain = 5
 
 file_to_transcript = ""
 
@@ -86,6 +89,39 @@ if "queues" not in st.session_state:
 
 
 audio_queue, update_queue = st.session_state.queues
+GAIN = st.session_state.gain
+
+
+def get_default_input_device():
+    idx = sd.default.device[0]  # input device index
+    info = sd.query_devices(idx)
+    return idx, info
+
+
+def classify_device(info):
+    name = info["name"].lower()
+    channels = info["max_input_channels"]
+
+    if "array" in name or channels > 1:
+        return "microphone_array"
+    else:
+        return "headset"
+
+
+def get_gain_for_device(device_type):
+    if device_type == "microphone_array":
+        return 5
+    if device_type == "headset":
+        return 1
+    return 1.5  # fallback
+
+
+def get_dynamic_gain():
+    idx, info = get_default_input_device()
+    device_type = classify_device(info)
+    gain = get_gain_for_device(device_type)
+
+    return gain
 
 
 vad = webrtcvad.Vad(2)
@@ -102,10 +138,17 @@ def audio_frame_callback(frame: av.AudioFrame):
     target_num_samples = int(num_samples * 16000 / frame.sample_rate)
 
     audio = resample(audio, target_num_samples)
-    audio = audio.astype(np.int16)
+    # Convert to float
+    audio = audio.astype(np.float32) / 32767.0
+    # Apply gain
+    audio *= GAIN
+    # Clip
+    audio = np.clip(audio, -1.0, 1.0)
+    # Reconvert to int
+    audio_16 = (audio * 32767.0).astype(np.int16)
 
-    if vad.is_speech(audio.tobytes(), 16000):
-        audio_queue.put(audio)
+    if vad.is_speech(audio_16.tobytes(), 16000):
+        audio_queue.put(audio_16)
 
     return frame
 
@@ -271,6 +314,7 @@ with mic_rt_tab:
             )
 
         if ctx.state.playing and not st.session_state["audio_started"]:
+            GAIN = get_dynamic_gain()
             config.set_target_exit(rt_exit)
             config.set_chosen_lang(st.session_state.lang)
             st.session_state.realtime_content = [""] * 6
