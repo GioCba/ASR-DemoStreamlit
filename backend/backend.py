@@ -35,11 +35,7 @@ def load_audio(audio_file: str, target_sr=16000):
     if sr != target_sr:
         waveform = torchaudio.functional.resample(waveform, sr, target_sr)
 
-    # float32 [-1,1] -> int16
-    audio_int16 = (waveform.squeeze(0).numpy() * 32767.0).astype(np.int16)
-
-    # ritorna buffer bytes
-    return audio_int16.tobytes()
+    return waveform, sr
 
 
 UPLOAD_DIR = None
@@ -114,27 +110,17 @@ async def upload(
     await file.close()
     m = models[lang]
 
-    if file.filename[-3:] == "wav":
-        transc = handler_batch(
-            m.args,
-            m.model,
-            m.valid_len,
-            m.inf,
-            m.dev,
-            f"uploads/{file.filename}",
-            exit=exit,
-        )
-    else:
-        audio_bytes = load_audio(f"uploads/{file.filename}")
-        transc = handler_batch(
-            m.args,
-            m.model,
-            m.valid_len,
-            m.inf,
-            m.dev,
-            audio_bytes,
-            exit=exit,
-        )
+    audio = load_audio(f"uploads/{file.filename}")
+
+    transc = handler_batch(
+        m.args,
+        m.model,
+        m.valid_len,
+        m.inf,
+        m.dev,
+        audio,
+        exit=exit,
+    )
 
     return {"result": transc}
 

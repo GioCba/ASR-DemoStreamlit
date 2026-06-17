@@ -435,15 +435,16 @@ def file_tab_fn(mic_mode=False, key=""):
                 ):
                     file_to_transcript = file
                     if file_to_transcript is not None:
+                        ext = file_to_transcript.name.split(".")[-1]
                         file_to_transcript.name = (
-                            f"user_file_{st.session_state.file_ctr}.wav"
+                            f"user_file_{st.session_state.file_ctr}." + ext
                         )
                         st.session_state.file_ctr += 1
                         files = {
                             "file": (
                                 file_to_transcript.name,
                                 file_to_transcript,
-                                "audio/wav",
+                                "audio",
                             )
                         }
                         params = {
