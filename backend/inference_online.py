@@ -51,9 +51,9 @@ def melspec_transform(waveform, args):
 SAMPLE_RATE = 16000
 
 
-LOOKBEHIND_SEC = 2.5  # 0.5
-CHUNK_SEC = 0.51  # 2.0
-LOOKAHEAD_SEC = 0.5  # 0.5
+LOOKBEHIND_SEC = 0.5  # 1.0 #1.0
+CHUNK_SEC = 2.0
+LOOKAHEAD_SEC = 0.5  # 1.0 #1.0
 
 LB = int(LOOKBEHIND_SEC * SAMPLE_RATE)
 CK = int(CHUNK_SEC * SAMPLE_RATE)
@@ -202,6 +202,7 @@ LB_e = int(LOOKBEHIND_SEC * EMB_PS)
 CK_e = int(CHUNK_SEC * EMB_PS)
 
 
+# Socket
 def handler_online(args, model, valid_len, inf, dev, conn, sock):
 
     print("Inizio streaming ASR...")
@@ -337,6 +338,107 @@ def handler_online(args, model, valid_len, inf, dev, conn, sock):
 
     conn.close()
     sock.close()
+
+
+# HTTP / WebSocket
+def handler_chunks(
+    args, model, valid_len, inf, dev, data: bytes, buffer, final: bool, exit: int
+):
+    if exit != ALL_EXITS and (exit < 0 or exit > 5):
+        exit = max(0, exit)
+        exit = min(5, exit)
+
+    # CPU MODE ONLY
+    global speech_detected
+    global count_silent_frames
+
+    pcm_buffer = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+    buffer = np.concatenate([buffer, pcm_buffer])
+
+    transc = []
+
+    if final:
+        print("Final flush")
+        win, buffer = build_window_from_buffer(buffer, final_flush=True)
+        if win is None:
+            transc = inf.stream_decoder(partial=False)
+            print(f"{transc=}")
+            return normalize_output(transc), np.zeros(0, dtype=np.float32)
+        wav = torch.from_numpy(win).unsqueeze(0)  # (1, T)
+        if wav.size(1) > int(SAMPLE_RATE / 10):  # remain wav length greater than 100ms
+            # print("\nCOUNT_SILENCE:", count_silent_frames, wav.size(1))
+            spec = spec_transform(wav, args)
+            spec = melspec_transform(spec, args).to(dev)
+
+            # 3) encoder sul chunk
+            valid_len = torch.tensor([spec.size(2)])
+            encoder = model(spec, valid_len)
+            if dev == "cpu":
+                for i in range(len(encoder)):
+                    if exit == i or exit == ALL_EXITS:
+                        transc.append(
+                            {
+                                "exit": i,
+                                "text": normalize_output(inf.ctc_predict_(encoder[i])),
+                            }
+                        )
+            else:
+                # CUDA
+                for i in range(len(encoder)):
+                    if exit == i or exit == ALL_EXITS:
+                        best_combined = inf.ctc_cuda_predict(encoder[i], args.tokens)
+                        text = args.sp.decode(best_combined[0][0].tokens).lower()
+                        transc.append(
+                            {
+                                "exit": i,
+                                "text": normalize_output(text),
+                            }
+                        )
+
+        inf.stream_decoder(partial=False)
+        return transc, np.zeros(0, dtype=np.float32)
+
+    while len(buffer) >= (LB + CK + LA):
+        win, buffer = build_window_from_buffer(buffer, final_flush=False)
+
+        if win is None:
+            continue
+
+        speech_detected = True
+
+        wav = torch.from_numpy(win).unsqueeze(0)
+
+        spec = spec_transform(wav, args)
+        spec = melspec_transform(spec, args).to(dev)
+
+        valid_len = torch.tensor([spec.size(2)])
+
+        encoder = model(spec, valid_len)
+        if dev == "cpu":
+            for i in range(len(encoder)):
+                if exit == i or exit == ALL_EXITS:
+                    transc.append(
+                        {
+                            "exit": i,
+                            "text": normalize_output(inf.ctc_predict_(encoder[i])),
+                        }
+                    )
+
+        else:
+            for i in range(len(encoder)):
+                if exit == i or exit == ALL_EXITS:
+                    best_combined = inf.ctc_cuda_predict(encoder[i], args.tokens)
+                    text = args.sp.decode(best_combined[0][0].tokens).lower()
+
+                    transc.append(
+                        {
+                            "exit": i,
+                            "text": normalize_output(text),
+                        }
+                    )
+
+    return transc, buffer
 
 
 def handler_batch(args, model, valid_len, inf, dev, file, exit: int):

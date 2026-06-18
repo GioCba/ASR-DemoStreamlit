@@ -11,8 +11,7 @@ import torchaudio
 import torchaudio.transforms as T
 from data import get_infer_data_loader
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket
-from inference import handler
-from inference_online import handler_batch
+from inference_online import handler_batch, handler_chunks
 from models.model.early_exit import Early_conformer
 from torch import nn, optim
 from torchaudio.models.decoder import ctc_decoder
@@ -152,7 +151,7 @@ async def handle_chunk(
         session_id = str(session_cnt)
         sessions[session_id] = s
 
-    transc, s.buffer = handler(
+    transc, s.buffer = handler_chunks(
         m.args,
         m.model,
         m.valid_len,
@@ -184,7 +183,7 @@ async def websocket_endpoint(websocket: WebSocket, exit: int = 5, lang: str = "i
 
             final = len(audio) == 0
 
-            transc, s.buffer = handler(
+            transc, s.buffer = handler_chunks(
                 m.args,
                 m.model,
                 m.valid_len,
