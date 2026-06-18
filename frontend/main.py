@@ -336,7 +336,7 @@ with mic_rt_tab:
         st.divider()
         with st.container(horizontal=True, horizontal_alignment="distribute"):
             new_length = st.number_input(
-                "Set buffer length in ms",
+                "Buffer length in ms",
                 min_value=200,
                 max_value=1000,
                 value=config.get_target_length(),
@@ -346,19 +346,19 @@ with mic_rt_tab:
             config.set_target_length(new_length)
 
             st.session_state.lang = st.selectbox(
-                "Select Language",
+                "Language",
                 key="mic_rt_chosen_lang",
                 options=["it", "en"],
             )
 
             rt_exit = st.selectbox(
-                "Select Exit",
+                "Exit",
                 key="mic_rt_chosen_exit",
                 options=["All", "1", "2", "3", "4", "5", "6"],
             )
 
             target_comm = st.selectbox(
-                "Select Communication Protocol",
+                "Communication Protocol",
                 key="mic_rt_chosen_comm",
                 options=["HTTP", "WebSockets"],
             )
@@ -463,22 +463,23 @@ def file_tab_fn(mic_mode=False, key=""):
         st.divider()
 
         with st.container(horizontal=True, horizontal_alignment="distribute"):
-            st.session_state.lang = st.selectbox(
-                "Select language",
-                key=f"{key}_file_chosen_lang",
-                options=["it", "en"],
-            )
+            with st.popover("Settings", type="primary"):
+                st.session_state.lang = st.selectbox(
+                    "Language",
+                    key=f"{key}_file_chosen_lang",
+                    options=["it", "en"],
+                )
 
-            exit = st.selectbox(
-                "Select exit",
-                key=f"{key}_file_chosen_exit",
-                options=["All", "1", "2", "3", "4", "5", "6"],
-            )
-            st.session_state.exit = int(exit) - 1 if exit != "All" else 99
+                exit = st.selectbox(
+                    "Exit",
+                    key=f"{key}_file_chosen_exit",
+                    options=["All", "1", "2", "3", "4", "5", "6"],
+                )
+                st.session_state.exit = int(exit) - 1 if exit != "All" else 99
 
             with st.container(horizontal_alignment="center", width="content"):
                 if st.button(
-                    "Transcribe", key=f"{key}_file_transcribe_btn", type="tertiary"
+                    "Transcribe", key=f"{key}_file_transcribe_btn", type="primary"
                 ):
                     file_to_transcript = file
                     if file_to_transcript is not None:
@@ -506,7 +507,7 @@ def file_tab_fn(mic_mode=False, key=""):
                         st.session_state["transcripted_text"] = resp.json()["result"]
                         st.session_state.is_transcripted = True
                     else:
-                        st.error("Nulla da trascrivere")
+                        st.error("Nothing to transcribe")
 
         st.divider()
 
