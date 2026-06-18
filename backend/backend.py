@@ -62,9 +62,11 @@ async def lifespan(app: FastAPI):
     global model_loaded
     global UPLOAD_DIR
     print("App is starting...")
+    # Create directory for uploaded files
     UPLOAD_DIR = Path("uploads")
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Load models
     for lang in ["it", "en"]:
         if lang == "it":
             args = get_args([], "Italian")
@@ -101,7 +103,7 @@ ALL_EXITS = 99
 async def upload(
     file: UploadFile = File(...), lang: str = Form("it"), exit: int = Form(5)
 ):
-
+    # Save file in uploads directory
     dest = UPLOAD_DIR / file.filename
     with dest.open("wb") as out_file:
         while content := await file.read(1024 * 1024):
@@ -109,6 +111,7 @@ async def upload(
     await file.close()
     m = models[lang]
 
+    # Get waveform and sample rate
     audio = load_audio(f"uploads/{file.filename}")
 
     transc = handler_batch(

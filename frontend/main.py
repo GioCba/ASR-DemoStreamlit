@@ -14,6 +14,7 @@ from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from websockets.sync.client import ClientConnection, connect
 
 
+# Settings modified by UI and used by sender thread
 class SharedConfig:
     def __init__(self):
         self._lock = threading.Lock()
@@ -55,13 +56,11 @@ class SharedConfig:
             return self._is_http
 
 
-if "config" not in st.session_state:
-    st.session_state["config"] = SharedConfig()
-config = st.session_state.config
-
 ####################################
 # Variables
 ####################################
+if "config" not in st.session_state:
+    st.session_state["config"] = SharedConfig()
 if "ctr" not in st.session_state:
     st.session_state["ctr"] = 0
 if "is_transcripted" not in st.session_state:
@@ -90,17 +89,20 @@ if "file_ctr" not in st.session_state:
     st.session_state.file_ctr = 0
 if "gain" not in st.session_state:
     st.session_state.gain = 5
-
-file_to_transcript = ""
-
-SENTINEL = "STOP"
-
 if "queues" not in st.session_state:
     st.session_state["queues"] = queue.Queue(), queue.Queue()
 
-
 audio_queue, update_queue = st.session_state.queues
+vad = webrtcvad.Vad(2)
+config = st.session_state.config
+file_to_transcript = ""
+SENTINEL = "STOP"
 GAIN = st.session_state.gain
+
+
+####################################
+# Functions
+####################################
 
 
 def get_default_input_device():
@@ -135,12 +137,10 @@ def get_dynamic_gain():
     return gain
 
 
-vad = webrtcvad.Vad(2)
-
-
 def audio_frame_callback(frame: av.AudioFrame):
     audio = frame.to_ndarray()
 
+    # Convert to mono
     if frame.layout.name == "stereo":
         audio = audio.reshape(-1, 2)
         audio = audio.mean(axis=1)
@@ -148,6 +148,7 @@ def audio_frame_callback(frame: av.AudioFrame):
     num_samples = audio.shape[0]
     target_num_samples = int(num_samples * 16000 / frame.sample_rate)
 
+    # Resample audio to 16 kHz
     audio = resample(audio, target_num_samples)
     # Convert to float
     audio = audio.astype(np.float32) / 32767.0
@@ -158,16 +159,19 @@ def audio_frame_callback(frame: av.AudioFrame):
     # Reconvert to int
     audio_16 = (audio * 32767.0).astype(np.int16)
 
+    # VAD control
     if vad.is_speech(audio_16.tobytes(), 16000):
         audio_queue.put(audio_16)
 
     return frame
 
 
+# Send sentinel
 def on_audio_ended():
     audio_queue.put(SENTINEL)
 
 
+# WebSocket receiver
 def receiver_worker(update_queue, ws):
     try:
         while True:
@@ -254,6 +258,7 @@ def sender_worker(audio_queue):
 
             buf.extend(raw_data)
 
+            # If length of buffer greater than target len chosen by user, send
             if len(buf) >= target_len:
                 files = {
                     "file": (
@@ -283,9 +288,11 @@ def sender_worker(audio_queue):
                 if any(resp_json["result"]):
                     update_queue.put(resp_json)
 
+                # Clear the buffer
                 buf = bytearray()
 
 
+# Activate thread
 if "worker_thread" not in st.session_state:
     print("starting new thread")
     t = threading.Thread(target=sender_worker, args=(audio_queue,), daemon=True)
@@ -308,10 +315,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-####################################
-# Functions
-####################################
 
 # UI
 st.title("Transcriber")
@@ -363,6 +366,7 @@ with mic_rt_tab:
                 options=["HTTP", "WebSockets"],
             )
 
+        # Set config parameters before sending
         if ctx.state.playing and not st.session_state["audio_started"]:
             GAIN = get_dynamic_gain()
             config.set_target_comm(target_comm)
@@ -382,6 +386,7 @@ with mic_rt_tab:
 
         poll_interval = 0.2
         while ctx.state.playing:
+            # Live transcription
             try:
                 resp_json = update_queue.get_nowait()
                 result = resp_json.get("result", [])
@@ -406,7 +411,7 @@ with mic_rt_tab:
 
         final_boxes = [st.empty() for _ in range(6)]
 
-        # After stopping
+        # Transcription after stopping
         if st.session_state["finished"]:
             try:
                 st.session_state["audio_started"] = False
@@ -483,6 +488,7 @@ def file_tab_fn(mic_mode=False, key=""):
                 ):
                     file_to_transcript = file
                     if file_to_transcript is not None:
+                        # Get file extension
                         ext = file_to_transcript.name.split(".")[-1]
                         file_to_transcript.name = (
                             f"user_file_{st.session_state.file_ctr}." + ext
@@ -499,6 +505,7 @@ def file_tab_fn(mic_mode=False, key=""):
                             "lang": st.session_state.lang,
                             "exit": st.session_state.exit,
                         }
+                        # send file and parameters
                         resp = requests.post(
                             "http://127.0.0.1:8000/uploads/",
                             files=files,
