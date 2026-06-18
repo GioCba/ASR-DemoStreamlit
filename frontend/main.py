@@ -1,3 +1,4 @@
+import json
 import queue
 import threading
 import time
@@ -10,6 +11,7 @@ import streamlit as st
 import webrtcvad
 from scipy.signal import resample
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
+from websockets.sync.client import ClientConnection, connect
 
 
 class SharedConfig:
@@ -18,6 +20,7 @@ class SharedConfig:
         self._target_length_ms = 500
         self._chosen_exit = 99
         self._chosen_lang = "it"
+        self._is_http = True
 
     def set_target_length(self, value):
         with self._lock:
@@ -31,6 +34,10 @@ class SharedConfig:
         with self._lock:
             self._chosen_exit = int(value) - 1 if value != "All" else 99
 
+    def set_target_comm(self, value: str):
+        with self._lock:
+            self._is_http = True if value == "HTTP" else False
+
     def get_target_length(self):
         with self._lock:
             return self._target_length_ms
@@ -42,6 +49,10 @@ class SharedConfig:
     def get_chosen_lang(self):
         with self._lock:
             return self._chosen_lang
+
+    def get_target_comm(self):
+        with self._lock:
+            return self._is_http
 
 
 if "config" not in st.session_state:
@@ -157,12 +168,49 @@ def on_audio_ended():
     audio_queue.put(SENTINEL)
 
 
+def receiver_worker(update_queue, ws):
+    try:
+        while True:
+            msg = ws.recv()
+            update_queue.put(json.loads(msg))
+    except Exception as e:
+        print("Receiver stopped:", e)
+
+
 def sender_worker(audio_queue):
     buf = bytearray()
     URL = "http://127.0.0.1:8000/chunks/"
     session_id = None
     while True:
-        try:
+        is_http = config.get_target_comm()
+        if not is_http:
+            receiver_thread: threading.Thread | None = None
+            ws: ClientConnection | None = None
+
+            while True:
+                try:
+                    data = audio_queue.get()
+                except queue.Empty:
+                    continue
+
+                if ws is None:
+                    chosen_exit = config.get_target_exit()
+                    chosen_lang = config.get_chosen_lang()
+                    ws = connect(
+                        f"ws://127.0.0.1:8000/ws?exit={chosen_exit}&lang={chosen_lang}"
+                    )
+                    receiver_thread = threading.Thread(
+                        target=receiver_worker, args=(update_queue, ws)
+                    )
+                    receiver_thread.start()
+
+                if isinstance(data, str) and data == SENTINEL:
+                    ws.send(b"")
+                    ws = None
+                else:
+                    audio_16 = data
+                    ws.send(audio_16.tobytes())
+        else:
             data = audio_queue.get()
 
             target_ms = config.get_target_length()
@@ -237,9 +285,6 @@ def sender_worker(audio_queue):
 
                 buf = bytearray()
 
-        except queue.Empty:
-            continue
-
 
 if "worker_thread" not in st.session_state:
     print("starting new thread")
@@ -291,7 +336,7 @@ with mic_rt_tab:
         st.divider()
         with st.container(horizontal=True, horizontal_alignment="distribute"):
             new_length = st.number_input(
-                "Target buffer length in ms",
+                "Set buffer length in ms",
                 min_value=200,
                 max_value=1000,
                 value=config.get_target_length(),
@@ -300,21 +345,27 @@ with mic_rt_tab:
 
             config.set_target_length(new_length)
 
-            # Scelta del linguaggio
             st.session_state.lang = st.selectbox(
-                "Seleziona lingua",
+                "Select Language",
                 key="mic_rt_chosen_lang",
                 options=["it", "en"],
             )
 
             rt_exit = st.selectbox(
-                "Scegli l'uscita",
+                "Select Exit",
                 key="mic_rt_chosen_exit",
                 options=["All", "1", "2", "3", "4", "5", "6"],
             )
 
+            target_comm = st.selectbox(
+                "Select Communication Protocol",
+                key="mic_rt_chosen_comm",
+                options=["HTTP", "WebSockets"],
+            )
+
         if ctx.state.playing and not st.session_state["audio_started"]:
             GAIN = get_dynamic_gain()
+            config.set_target_comm(target_comm)
             config.set_target_exit(rt_exit)
             config.set_chosen_lang(st.session_state.lang)
             st.session_state.realtime_content = [""] * 6
@@ -393,7 +444,6 @@ with mic_rt_tab:
 
 
 def file_tab_fn(mic_mode=False, key=""):
-
     with st.container(
         border=True, height="stretch", width="stretch", horizontal_alignment="center"
     ):
@@ -413,21 +463,18 @@ def file_tab_fn(mic_mode=False, key=""):
         st.divider()
 
         with st.container(horizontal=True, horizontal_alignment="distribute"):
-            with st.popover("Settings"):
-                # language selection
-                st.session_state.lang = st.selectbox(
-                    "Select language",
-                    key=f"{key}_file_chosen_lang",
-                    options=["it", "en"],
-                )
+            st.session_state.lang = st.selectbox(
+                "Select language",
+                key=f"{key}_file_chosen_lang",
+                options=["it", "en"],
+            )
 
-                # Exit selection
-                exit = st.selectbox(
-                    "Select exit",
-                    key=f"{key}_file_chosen_exit",
-                    options=["All", "1", "2", "3", "4", "5", "6"],
-                )
-                st.session_state.exit = int(exit) - 1 if exit != "All" else 99
+            exit = st.selectbox(
+                "Select exit",
+                key=f"{key}_file_chosen_exit",
+                options=["All", "1", "2", "3", "4", "5", "6"],
+            )
+            st.session_state.exit = int(exit) - 1 if exit != "All" else 99
 
             with st.container(horizontal_alignment="center", width="content"):
                 if st.button(
