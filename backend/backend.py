@@ -11,6 +11,7 @@ import torchaudio
 import torchaudio.transforms as T
 from data import get_infer_data_loader
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket
+from faster_whisper import WhisperModel
 from inference_online import handler_batch, handler_chunks
 from models.model.early_exit import Early_conformer
 from torch import nn, optim
@@ -49,10 +50,7 @@ class Model:
         self.dev = dev
 
 
-langs = {
-    "it": "Italian",
-    "en": "English",
-}
+langs = {"it": "Italian", "en": "English", "whisper": "whisper"}
 
 models = {}
 
@@ -67,8 +65,8 @@ async def lifespan(app: FastAPI):
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load models
-    for lang in ["it", "en"]:
-        if lang == "it":
+    for lang in ["EE-it", "EE-en"]:
+        if lang == "EE-it":
             args = get_args([], "Italian")
         else:
             args = get_args([], "English")
@@ -76,7 +74,9 @@ async def lifespan(app: FastAPI):
         print(f"{lang}-model loaded")
         models[lang] = Model(args, model, inf, valid_len, dev)
 
-    models["rt"] = models["it"]
+    models["whisper"] = WhisperModel("tiny", device="cpu", compute_type="int8")
+
+    models["rt"] = models["EE-it"]
 
     model_loaded = True
 
@@ -101,7 +101,7 @@ ALL_EXITS = 99
 
 @app.post("/uploads/")
 async def upload(
-    file: UploadFile = File(...), lang: str = Form("it"), exit: int = Form(5)
+    file: UploadFile = File(...), model_type: str = Form("EE-it"), exit: int = Form(5)
 ):
     # Save file in uploads directory
     dest = UPLOAD_DIR / file.filename
@@ -109,20 +109,26 @@ async def upload(
         while content := await file.read(1024 * 1024):
             out_file.write(content)
     await file.close()
-    m = models[lang]
+    m = models[model_type]
 
-    # Get waveform and sample rate
-    audio = load_audio(f"uploads/{file.filename}")
+    if model_type == "whisper":
+        segments, _ = m.transcribe(f"uploads/{file.filename}")
+        segments = list(segments)
+        transc = ""
+        for segment in segments:
+            transc += segment.text
+    else:
+        audio = load_audio(f"uploads/{file.filename}")
 
-    transc = handler_batch(
-        m.args,
-        m.model,
-        m.valid_len,
-        m.inf,
-        m.dev,
-        audio,
-        exit=exit,
-    )
+        transc = handler_batch(
+            m.args,
+            m.model,
+            m.valid_len,
+            m.inf,
+            m.dev,
+            audio,
+            exit=exit,
+        )
 
     return {"result": transc}
 
@@ -141,11 +147,11 @@ async def handle_chunk(
     file: Annotated[bytes, File()],
     session_id: str | None = Form(None),
     final: bool | None = Form(None),
-    lang: str = Form("it"),
+    model_type: str = Form("EE-it"),
     exit: int = Form(5),
 ):
     global session_cnt
-    m = models[lang]
+    m = models[model_type]
 
     s = sessions.get(session_id)
     if s is None:

@@ -470,9 +470,9 @@ def file_tab_fn(mic_mode=False, key=""):
         with st.container(horizontal=True, horizontal_alignment="distribute"):
             with st.popover("Settings", type="primary"):
                 st.session_state.lang = st.selectbox(
-                    "Language",
+                    "Choose Model",
                     key=f"{key}_file_chosen_lang",
-                    options=["it", "en"],
+                    options=["EE-it", "EE-en", "whisper"],
                 )
 
                 exit = st.selectbox(
@@ -488,6 +488,7 @@ def file_tab_fn(mic_mode=False, key=""):
                 ):
                     file_to_transcript = file
                     if file_to_transcript is not None:
+                        config.set_chosen_lang(st.session_state.lang)
                         # Get file extension
                         ext = file_to_transcript.name.split(".")[-1]
                         file_to_transcript.name = (
@@ -502,7 +503,7 @@ def file_tab_fn(mic_mode=False, key=""):
                             )
                         }
                         params = {
-                            "lang": st.session_state.lang,
+                            "model_type": st.session_state.lang,
                             "exit": st.session_state.exit,
                         }
                         # send file and parameters
@@ -519,8 +520,11 @@ def file_tab_fn(mic_mode=False, key=""):
         st.divider()
 
         transc = st.session_state["transcripted_text"]
-        for t in transc:
-            st.write(f"Exit {t['exit'] + 1}: {t['text']}")
+        if config.get_chosen_lang() == "whisper":
+            st.write(st.session_state["transcripted_text"])
+        else:
+            for t in transc:
+                st.write(f"Exit {t['exit'] + 1}: {t['text']}")
 
 
 with file_tab:
