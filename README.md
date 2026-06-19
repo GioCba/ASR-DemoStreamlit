@@ -6,16 +6,16 @@ There are 3 main features:
 - File upload and transcription
 - Real-time transcription
 
-Currently the only supported models are these: https://huggingface.co/SpeechTek/Italian-EE-conformer https://huggingface.co/SpeechTek/English-EE-conformer.
+Currently the only supported models are these: https://huggingface.co/SpeechTek/Italian-EE-conformer https://huggingface.co/SpeechTek/English-EE-conformer and Whisper, with [faster-whisper](https://pypi.org/project/faster-whisper/) (WIP). The latter one only for batch transcription.
 
 ## How to run
 **N.B.** To run this application install and use Python 3.11, to develop this I personally used Python 3.11.14.
 - Clone the repository
-- Inside of /backend, put both models' directories
+- Inside of /backend, put both the directories of the EE-Conformer models. Whisper is automatically downloaded when installing faster-whisper as a requirement
 - Create a virtual environment with ```python3.11 -m venv .venv``` inside of the backend directory
 - Install the requirements with ```pip install -r requirements.txt``` in the backend directory
 - Open a second terminal, in the frontend directory
-- Create another virtual environment and install the frontend's requiremnts
+- Create another virtual environment and install the frontend's requirements
 - In the first terminal, get inside of the backend directory and launch the backend server with ```python backend.py```
 - After both models are loaded and the server is ready.
 - Launch the UI from the frontend directory with ```streamlit run main.py```
