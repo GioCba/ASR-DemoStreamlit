@@ -5,5 +5,4 @@ sentencepiece>=0.1.99
 editdistance>=0.8.1
 tensorboard>=2.14
 flashlight-text
-webrtcvad
-scipy
+faster-whisper
