@@ -521,7 +521,7 @@ def file_tab_fn(mic_mode=False, key=""):
 
         transc = st.session_state["transcripted_text"]
         if config.get_chosen_lang() == "whisper":
-            st.write(st.session_state["transcripted_text"])
+            st.write(f"Transcription: {st.session_state['transcripted_text']}")
         else:
             for t in transc:
                 st.write(f"Exit {t['exit'] + 1}: {t['text']}")

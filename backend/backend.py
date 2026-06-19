@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
 
     yield
     print("App is shutting down...")
-    # Keep files stored after each shutdown of the server
+    # Dont keep files stored after each shutdown of the server
     # if UPLOAD_DIR.exists():
     #     for item in UPLOAD_DIR.iterdir():
     #         try:
